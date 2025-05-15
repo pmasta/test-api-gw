@@ -1,24 +1,8 @@
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.cloud.client.ServiceInstance;
-import org.springframework.cloud.client.discovery.DiscoveryClient;
-import org.springframework.cloud.gateway.filter.GlobalFilter;
-import org.springframework.core.Ordered;
-import org.springframework.http.HttpStatus;
-import org.springframework.stereotype.Component;
-import org.springframework.web.server.ServerWebExchange;
-import org.springframework.web.util.UriComponentsBuilder;
-import reactor.core.publisher.Mono;
-
-import java.net.URI;
-import java.util.*;
-import java.util.stream.Collectors;
 
 @Component
 public class RetryingEurekaRouterGlobalFilter implements GlobalFilter, Ordered {
 
     private static final Logger log = LoggerFactory.getLogger(RetryingEurekaRouterGlobalFilter.class);
-
     private final DiscoveryClient discoveryClient;
     private static final int MAX_RETRIES = 3;
 
@@ -30,16 +14,16 @@ public class RetryingEurekaRouterGlobalFilter implements GlobalFilter, Ordered {
     public Mono<Void> filter(ServerWebExchange exchange, org.springframework.cloud.gateway.filter.GatewayFilterChain chain) {
         String originalPath = exchange.getRequest().getURI().getPath();
         String[] segments = originalPath.split("/");
+
         if (segments.length < 2) {
             log.warn("Invalid path, cannot extract serviceId: {}", originalPath);
-            return chain.filter(exchange); // nie ruszaj jeśli nie da się wyciągnąć serviceId
+            return chain.filter(exchange); // kontynuuj bez zmiany
         }
 
-        String serviceId = segments[1]; // pierwszy segment to serviceId (np. /service-A/...)
+        String serviceId = segments[1]; // pierwszy segment (np. /orders/** → serviceId=orders)
+        String newPath = originalPath.substring(serviceId.length() + 1); // usuń /serviceId
 
-        String newPath = originalPath.substring(serviceId.length() + 1); // obetnij /serviceId
-        log.info("Routing request to serviceId '{}' with rewritten path '{}'", serviceId, newPath);
-
+        log.info("[GATEWAY] Incoming request → serviceId='{}', newPath='{}'", serviceId, newPath);
         return routeWithRetry(exchange, chain, serviceId, "/" + newPath, MAX_RETRIES, new HashSet<>());
     }
 
@@ -51,9 +35,8 @@ public class RetryingEurekaRouterGlobalFilter implements GlobalFilter, Ordered {
                                       Set<String> triedInstanceIds) {
 
         List<ServiceInstance> instances = discoveryClient.getInstances(serviceId);
-
         if (instances.isEmpty()) {
-            log.error("No instances found for service '{}'", serviceId);
+            log.error("❌ No instances found for service '{}'", serviceId);
             return Mono.error(new IllegalStateException("No available instances"));
         }
 
@@ -62,23 +45,37 @@ public class RetryingEurekaRouterGlobalFilter implements GlobalFilter, Ordered {
                 .collect(Collectors.toList());
 
         if (candidates.isEmpty()) {
-            log.warn("All instances of '{}' already tried and failed", serviceId);
+            log.warn("⚠️ All instances of '{}' already tried and failed", serviceId);
             return Mono.error(new IllegalStateException("No more instances to try"));
         }
 
         ServiceInstance chosen = candidates.get(new Random().nextInt(candidates.size()));
         triedInstanceIds.add(chosen.getInstanceId());
 
-        log.info("Routing to instance: {}:{} (id: {}, metadata: {})",
-                chosen.getHost(), chosen.getPort(), chosen.getInstanceId(), chosen.getMetadata());
+        // Determine scheme
+        String scheme = Optional.ofNullable(chosen.getScheme())
+                .orElse(Optional.ofNullable(chosen.getMetadata().get("scheme")).orElse("http"));
+
+        // Determine basepath
+        String basePath = Optional.ofNullable(chosen.getMetadata().get("basepath"))
+                .filter(p -> !p.isBlank())
+                .map(p -> p.startsWith("/") ? p : "/" + p)
+                .orElse("");
+
+        // Final path: basepath + newPath
+        String fullPath = (basePath + newPath).replaceAll("//+", "/");
 
         URI newUri = UriComponentsBuilder.newInstance()
-                .scheme("http")
+                .scheme(scheme)
                 .host(chosen.getHost())
                 .port(chosen.getPort())
-                .path(newPath)
+                .path(fullPath)
                 .query(exchange.getRequest().getURI().getQuery())
-                .build(true).toUri();
+                .build(true)
+                .toUri();
+
+        log.info("➡️ Routing to instance: [{}:{}], scheme={}, path={}, retries left={}",
+                chosen.getHost(), chosen.getPort(), scheme, fullPath, remainingRetries);
 
         ServerWebExchange mutatedExchange = exchange.mutate()
                 .request(r -> r.uri(newUri))
@@ -86,7 +83,7 @@ public class RetryingEurekaRouterGlobalFilter implements GlobalFilter, Ordered {
 
         return chain.filter(mutatedExchange)
                 .onErrorResume(ex -> {
-                    log.warn("Error routing to instance {} ({} retries left): {}", chosen.getInstanceId(), remainingRetries, ex.getMessage());
+                    log.warn("🔥 Exception from instance {}: {} ({} retries left)", chosen.getInstanceId(), ex.getMessage(), remainingRetries);
                     if (remainingRetries > 0) {
                         return routeWithRetry(exchange, chain, serviceId, newPath, remainingRetries - 1, triedInstanceIds);
                     }
@@ -95,7 +92,7 @@ public class RetryingEurekaRouterGlobalFilter implements GlobalFilter, Ordered {
                 .flatMap(voidResp -> {
                     HttpStatus code = mutatedExchange.getResponse().getStatusCode();
                     if (code != null && code.is5xxServerError() && remainingRetries > 0) {
-                        log.warn("Got {} from instance {} — retrying ({} retries left)", code, chosen.getInstanceId(), remainingRetries);
+                        log.warn("🔁 Retry: got {} from {}, retrying ({} left)", code, chosen.getInstanceId(), remainingRetries);
                         return mutatedExchange.getResponse().setComplete()
                                 .then(routeWithRetry(exchange, chain, serviceId, newPath, remainingRetries - 1, triedInstanceIds));
                     }
@@ -105,6 +102,6 @@ public class RetryingEurekaRouterGlobalFilter implements GlobalFilter, Ordered {
 
     @Override
     public int getOrder() {
-        return -1;
+        return -1; // wykonuje się wcześnie
     }
 }
