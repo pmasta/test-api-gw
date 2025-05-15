@@ -1,107 +1,78 @@
-
 @Component
-public class RetryingEurekaRouterGlobalFilter implements GlobalFilter, Ordered {
+public class BasepathAwareGatewayFilterFactory extends AbstractGatewayFilterFactory<BasepathAwareGatewayFilterFactory.Config> {
 
-    private static final Logger log = LoggerFactory.getLogger(RetryingEurekaRouterGlobalFilter.class);
+    private static final Logger log = LoggerFactory.getLogger(BasepathAwareGatewayFilterFactory.class);
     private final DiscoveryClient discoveryClient;
-    private static final int MAX_RETRIES = 3;
 
-    public RetryingEurekaRouterGlobalFilter(DiscoveryClient discoveryClient) {
+    public BasepathAwareGatewayFilterFactory(DiscoveryClient discoveryClient) {
+        super(Config.class);
         this.discoveryClient = discoveryClient;
     }
 
-    @Override
-    public Mono<Void> filter(ServerWebExchange exchange, org.springframework.cloud.gateway.filter.GatewayFilterChain chain) {
-        String originalPath = exchange.getRequest().getURI().getPath();
-        String[] segments = originalPath.split("/");
+    public static class Config {
+        private String serviceId;
+        private String stripPrefix; // np. "/auth-server"
 
-        if (segments.length < 2) {
-            log.warn("Invalid path, cannot extract serviceId: {}", originalPath);
-            return chain.filter(exchange); // kontynuuj bez zmiany
+        public String getServiceId() {
+            return serviceId;
         }
 
-        String serviceId = segments[1]; // pierwszy segment (np. /orders/** → serviceId=orders)
-        String newPath = originalPath.substring(serviceId.length() + 1); // usuń /serviceId
+        public void setServiceId(String serviceId) {
+            this.serviceId = serviceId;
+        }
 
-        log.info("[GATEWAY] Incoming request → serviceId='{}', newPath='{}'", serviceId, newPath);
-        return routeWithRetry(exchange, chain, serviceId, "/" + newPath, MAX_RETRIES, new HashSet<>());
+        public String getStripPrefix() {
+            return stripPrefix;
+        }
+
+        public void setStripPrefix(String stripPrefix) {
+            this.stripPrefix = stripPrefix;
+        }
     }
 
-    private Mono<Void> routeWithRetry(ServerWebExchange exchange,
-                                      org.springframework.cloud.gateway.filter.GatewayFilterChain chain,
-                                      String serviceId,
-                                      String newPath,
-                                      int remainingRetries,
-                                      Set<String> triedInstanceIds) {
+    @Override
+    public GatewayFilter apply(Config config) {
+        return (exchange, chain) -> buildUriWithBasePath(exchange, config).flatMap(uri -> {
+            log.info("🔀 Routing to URI: {}", uri);
+            exchange.getAttributes().put(ServerWebExchangeUtils.GATEWAY_REQUEST_URL_ATTR, uri);
+            return chain.filter(exchange);
+        });
+    }
 
-        List<ServiceInstance> instances = discoveryClient.getInstances(serviceId);
+    private Mono<URI> buildUriWithBasePath(ServerWebExchange exchange, Config config) {
+        List<ServiceInstance> instances = discoveryClient.getInstances(config.getServiceId());
         if (instances.isEmpty()) {
-            log.error("❌ No instances found for service '{}'", serviceId);
-            return Mono.error(new IllegalStateException("No available instances"));
+            return Mono.error(new IllegalStateException("No instances for service " + config.getServiceId()));
         }
 
-        List<ServiceInstance> candidates = instances.stream()
-                .filter(i -> !triedInstanceIds.contains(i.getInstanceId()))
-                .collect(Collectors.toList());
+        ServiceInstance instance = instances.get(new Random().nextInt(instances.size()));
 
-        if (candidates.isEmpty()) {
-            log.warn("⚠️ All instances of '{}' already tried and failed", serviceId);
-            return Mono.error(new IllegalStateException("No more instances to try"));
+        String scheme = Optional.ofNullable(instance.getScheme())
+                .orElse(Optional.ofNullable(instance.getMetadata().get("scheme")).orElse("http"));
+
+        String basePath = Optional.ofNullable(instance.getMetadata().get("basepath")).orElse("");
+        if (!basePath.isEmpty() && !basePath.startsWith("/")) {
+            basePath = "/" + basePath;
         }
 
-        ServiceInstance chosen = candidates.get(new Random().nextInt(candidates.size()));
-        triedInstanceIds.add(chosen.getInstanceId());
+        String requestPath = exchange.getRequest().getURI().getRawPath();
+        String strippedPath = requestPath;
 
-        // Determine scheme
-        String scheme = Optional.ofNullable(chosen.getScheme())
-                .orElse(Optional.ofNullable(chosen.getMetadata().get("scheme")).orElse("http"));
+        if (config.getStripPrefix() != null && !config.getStripPrefix().isBlank()) {
+            strippedPath = requestPath.replaceFirst("^" + config.getStripPrefix(), "");
+        }
 
-        // Determine basepath
-        String basePath = Optional.ofNullable(chosen.getMetadata().get("basepath"))
-                .filter(p -> !p.isBlank())
-                .map(p -> p.startsWith("/") ? p : "/" + p)
-                .orElse("");
+        String fullPath = (basePath + strippedPath).replaceAll("//+", "/");
 
-        // Final path: basepath + newPath
-        String fullPath = (basePath + newPath).replaceAll("//+", "/");
-
-        URI newUri = UriComponentsBuilder.newInstance()
+        URI uri = UriComponentsBuilder.newInstance()
                 .scheme(scheme)
-                .host(chosen.getHost())
-                .port(chosen.getPort())
-                .path(fullPath)
-                .query(exchange.getRequest().getURI().getQuery())
+                .host(instance.getHost())
+                .port(instance.getPort())
+                .replacePath(fullPath)
+                .query(exchange.getRequest().getURI().getRawQuery())
                 .build(true)
                 .toUri();
 
-        log.info("➡️ Routing to instance: [{}:{}], scheme={}, path={}, retries left={}",
-                chosen.getHost(), chosen.getPort(), scheme, fullPath, remainingRetries);
-
-        ServerWebExchange mutatedExchange = exchange.mutate()
-                .request(r -> r.uri(newUri))
-                .build();
-
-        return chain.filter(mutatedExchange)
-                .onErrorResume(ex -> {
-                    log.warn("🔥 Exception from instance {}: {} ({} retries left)", chosen.getInstanceId(), ex.getMessage(), remainingRetries);
-                    if (remainingRetries > 0) {
-                        return routeWithRetry(exchange, chain, serviceId, newPath, remainingRetries - 1, triedInstanceIds);
-                    }
-                    return Mono.error(ex);
-                })
-                .flatMap(voidResp -> {
-                    HttpStatus code = mutatedExchange.getResponse().getStatusCode();
-                    if (code != null && code.is5xxServerError() && remainingRetries > 0) {
-                        log.warn("🔁 Retry: got {} from {}, retrying ({} left)", code, chosen.getInstanceId(), remainingRetries);
-                        return mutatedExchange.getResponse().setComplete()
-                                .then(routeWithRetry(exchange, chain, serviceId, newPath, remainingRetries - 1, triedInstanceIds));
-                    }
-                    return Mono.empty();
-                });
-    }
-
-    @Override
-    public int getOrder() {
-        return -1; // wykonuje się wcześnie
+        return Mono.just(uri);
     }
 }
