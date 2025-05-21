@@ -1,9 +1,17 @@
-import pysqlite3
+import os
 import sys
 import subprocess
 
-sys.modules["sqlite3"] = pysqlite3
+PYTHON_CODE = """
+import pysqlite3
+import sys
+sys.modules['sqlite3'] = pysqlite3
+import chromadb.cli
+"""
 
-subprocess.run([
-    sys.executable, "-m", "chromadb.cli", "run", "--path", "./chroma_data"
-])
+# Uruchom chroma run z podmienionym sqlite3 i pełnym widocznym outputem
+subprocess.run(
+    [sys.executable, "-c", PYTHON_CODE, "run", "--path", "./chroma_data"],
+    stdout=sys.stdout,
+    stderr=sys.stderr
+)
