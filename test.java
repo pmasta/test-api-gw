@@ -1,17 +1,15 @@
 import os
-import subprocess
 import sys
+import subprocess
 
-# Zmienna środowiskowa – wskazuje Pythona z podmienionym sqlite3
-python_code = """
+PYTHON_CODE = """
 import pysqlite3
 import sys
 sys.modules['sqlite3'] = pysqlite3
-import runpy
-runpy.run_module('chromadb.cli', run_name='__main__')
+import chromadb.cli
 """
 
-# Uruchom chroma z podmienionym sqlite3
-subprocess.run(
-    [sys.executable, "-c", python_code, "run", "--path", "./chroma_data"]
-)
+# Uruchom chroma run z podmienionym sqlite3
+subprocess.run([
+    sys.executable, "-c", PYTHON_CODE, "run", "--path", "./chroma_data"
+])
