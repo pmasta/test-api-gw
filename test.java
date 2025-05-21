@@ -1,11 +1,9 @@
-import sys
 import pysqlite3
-import subprocess
+import sys
+import os
 
-# Podmień sqlite3 → pysqlite3
+# Podmiana sqlite3 → pysqlite3
 sys.modules["sqlite3"] = pysqlite3
 
-# Uruchom Chroma CLI z widocznym outputem
-subprocess.run([
-    sys.executable, "-m", "chromadb.cli", "run", "--path", "./chroma_data"
-], stdout=sys.stdout, stderr=sys.stderr)
+# Uruchom chroma jako osobny proces CLI
+os.execvp("chroma", ["chroma", "run", "--path", "./chroma_data"])
