@@ -1,8 +1,5 @@
-from chromadb.utils.embedding_functions import SentenceTransformerEmbeddingFunction
+RUN pip install --break-system-packages -r requirements.txt
 
-embedding_fn = SentenceTransformerEmbeddingFunction(model_name="all-MiniLM-L6-v2")
-
-collection = client.get_or_create_collection(
-    name="test_collection",
-    embedding_function=embedding_fn
-)
+# Problematic package – retry logic
+RUN pip install --break-system-packages sentence-transformers || \
+    (echo "Retrying..."; sleep 3; pip install --break-system-packages sentence-transformers)
