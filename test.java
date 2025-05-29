@@ -1,41 +1,27 @@
-Overview
-description_reader is a simple Java application that:
+#!/bin/bash
+set -e
 
-Analyzes source code,
+IMAGE_NAME=chroma-backend
+VERSION=1.0.0
+FULL_IMAGE_NAME=nexus.example.com/your-group/${IMAGE_NAME}:${VERSION}
+CONTAINER_NAME=chroma-backend-container
 
-Generates descriptions or summaries,
+# If --pull is passed, skip build and pull from Nexus
+if [[ "$1" == "--pull" ]]; then
+  echo "Pulling Docker image from Nexus: $FULL_IMAGE_NAME"
+  docker pull $FULL_IMAGE_NAME
+else
+  echo "Building Docker image locally: $FULL_IMAGE_NAME"
+  docker build -t $FULL_IMAGE_NAME ./chroma
+fi
 
-Automatically sends them to the Chroma vector database.
+# Stop and remove existing container if running
+if [ "$(docker ps -aq -f name=$CONTAINER_NAME)" ]; then
+    echo "Removing existing container: $CONTAINER_NAME"
+    docker rm -f $CONTAINER_NAME
+fi
 
-Prerequisites
-Java 17 or newer (JDK)
+echo "Running container on port 5000"
+docker run -d -p 5000:5000 --name $CONTAINER_NAME $FULL_IMAGE_NAME
 
-The Chroma backend must be running and accessible (default: http://localhost:5000)
-
-1. Compile the application
-Navigate to the description_reader directory and compile the Java files:
-
-bash
-Kopiuj
-Edytuj
-cd description_reader
-javac DescriptionReader.java
-(Replace DescriptionReader.java with the actual entry point if it's different.)
-
-2. Run the application
-bash
-Kopiuj
-Edytuj
-java DescriptionReader \
-  --source-path ../your-code-directory \
-  --chroma-endpoint http://localhost:5000
-Replace your-code-directory with the path to the project you want to analyze.
-
-Optional Parameters
-If your script supports arguments, you can pass them via command line, such as:
-
---language java
-
---recursive true
-
---log true
+echo "Backend is running at http://localhost:5000"
