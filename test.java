@@ -1,10 +1,42 @@
-# Stop and remove any existing container with the same name
-if [ "$(docker ps -aq -f name=chroma-backend-container)" ]; then
-    echo "Removing existing container..."
-    docker rm -f chroma-backend-container
-fi
+Prerequisites
+Make sure you have the following installed:
 
-echo "Running container on port 5000"
-docker run -d -p 5000:5000 --name chroma-backend-container $FULL_IMAGE_NAME
+Python 3.8 or higher
 
-echo "Container is running. Access the backend on http://localhost:5000"
+pip (Python package manager)
+
+(Optional) virtualenv or venv for isolated environments
+
+1. Set up the environment
+bash
+Kopiuj
+Edytuj
+# Navigate to the Streamlit app directory
+cd streamlit-app
+
+# (Optional) Create and activate a virtual environment
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+2. Install Python dependencies
+Before running the app, you must install all required Python libraries listed in requirements.txt:
+
+bash
+Kopiuj
+Edytuj
+pip install -r requirements.txt
+This step is mandatory to ensure the app runs correctly.
+
+3. Run the app
+bash
+Kopiuj
+Edytuj
+streamlit run app.py
+Replace app.py with the actual filename if different.
+
+4. Access the app
+Once started, the app will be available at:
+
+arduino
+Kopiuj
+Edytuj
+http://localhost:8501
