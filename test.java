@@ -1,42 +1,41 @@
+Overview
+description_reader is a simple Java application that:
+
+Analyzes source code,
+
+Generates descriptions or summaries,
+
+Automatically sends them to the Chroma vector database.
+
 Prerequisites
-Make sure you have the following installed:
+Java 17 or newer (JDK)
 
-Python 3.8 or higher
+The Chroma backend must be running and accessible (default: http://localhost:5000)
 
-pip (Python package manager)
-
-(Optional) virtualenv or venv for isolated environments
-
-1. Set up the environment
-bash
-Kopiuj
-Edytuj
-# Navigate to the Streamlit app directory
-cd streamlit-app
-
-# (Optional) Create and activate a virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-2. Install Python dependencies
-Before running the app, you must install all required Python libraries listed in requirements.txt:
+1. Compile the application
+Navigate to the description_reader directory and compile the Java files:
 
 bash
 Kopiuj
 Edytuj
-pip install -r requirements.txt
-This step is mandatory to ensure the app runs correctly.
+cd description_reader
+javac DescriptionReader.java
+(Replace DescriptionReader.java with the actual entry point if it's different.)
 
-3. Run the app
+2. Run the application
 bash
 Kopiuj
 Edytuj
-streamlit run app.py
-Replace app.py with the actual filename if different.
+java DescriptionReader \
+  --source-path ../your-code-directory \
+  --chroma-endpoint http://localhost:5000
+Replace your-code-directory with the path to the project you want to analyze.
 
-4. Access the app
-Once started, the app will be available at:
+Optional Parameters
+If your script supports arguments, you can pass them via command line, such as:
 
-arduino
-Kopiuj
-Edytuj
-http://localhost:8501
+--language java
+
+--recursive true
+
+--log true
